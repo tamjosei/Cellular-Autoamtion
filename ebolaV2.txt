@@ -1,0 +1,471 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <pthread.h>
+
+
+typedef struct ThreadParams {
+    int threadNum;
+    int** current_world;
+    int** future_world;
+} ThreadParams;
+
+
+#define NUM_THREADS 4
+
+// Define the size of the world and the number of generations
+#define N 10
+#define _GENERATIONS 20
+
+// Define constants for different states
+#define _Susceptible 1
+#define _Infected 2
+#define _Dead 3
+#define _Recovered 4
+
+// Function to dynamically create a 2D array
+int** createArray(const int n);
+
+// Function to free memory occupied by a 2D array
+void freeArray(int** arr);
+
+// Function to write the current state of the world to a file
+void writeGenerationToFile(int** current_world, int generation);
+
+// Function to display the current state of the world
+void show(int** world);
+
+// Function to calculate the counts of Susceptible, Infected, and Recovered neighbors
+void getCountsSIR(int** current_world, int* counts, int i, int j);
+
+// Function to apply infection and recovery rules and update the world
+void* iteration(void* arg);
+
+// Function to generate a random number between 0 and 1
+double getRandom();
+
+// Function to initialize the world with initial states
+void initialize(int** p);
+
+int main()
+{
+    // Create 2D arrays for the current and future worlds
+    int** current_world = createArray(N);
+    int** future_world = createArray(N);
+    int i;
+
+    // Seed the random number generator
+    srand(102);
+
+    // Initialize the current world with initial states
+    initialize(current_world);
+
+    // Display the initial state of the world
+    show(current_world);
+    printf("\n");
+
+    // Iterate over generations
+    for (i = 0; i < _GENERATIONS; i++)
+    {
+
+        pthread_t threads[NUM_THREADS];
+
+        for (int i = 0; i < NUM_THREADS; i++)
+        {
+            ThreadParams* params = (ThreadParams*)malloc(sizeof(ThreadParams));
+            params->current_world = current_world;
+            params->future_world = future_world;
+            params->threadNum = i;
+            pthread_create(&threads[i], NULL, iteration, (void*)params);
+        }
+
+        for (int i = 0; i < NUM_THREADS; i++)
+        {
+            pthread_join(threads[i], NULL);
+
+        }
+
+        // Swap the current and future worlds
+        int** temp = current_world;
+        current_world = future_world;
+        future_world = temp;
+
+        // Write the current state of the world to a file
+        writeGenerationToFile(current_world, i + 1);
+
+        
+    }
+
+    // Display the state of the world for the final generation
+    show(current_world);
+
+    // Free the memory occupied by the arrays
+    freeArray(current_world);
+    freeArray(future_world);
+
+    return 0;
+}
+
+// Function to dynamically create a 2D array of size n x n
+int** createArray(const int n)
+{
+    // Allocate memory for the array of pointers (rows)
+    int** arr = (int**)malloc(n * sizeof(int*));
+    
+    // Allocate contiguous memory for the array elements
+    int* memory = (int*)malloc(n * n * sizeof(int));
+    int i = 0;
+    
+    // Update pointers for each row
+    for (i = 0; i < n; i++)
+        arr[i] = &memory[i * n];
+    return arr;
+}
+
+// Function to free the memory occupied by a 2D array
+void freeArray(int** arr)
+{
+    free(arr[0]);
+    free(arr);
+}
+
+// Function to write the current state of the world to a file
+void writeGenerationToFile(int** current_world, int generation)
+{
+    // Generate a filename based on the generation number
+    char filename[50];
+    snprintf(filename, sizeof(filename), "generation%d.txt", generation);
+
+    // Generate a filenamefor counts based on the generation number
+    char filename2[50];
+    snprintf(filename2, sizeof(filename2), "generation_counts%d.txt", generation);
+
+    // Open the file for writing
+    FILE* file = fopen(filename, "w");
+    if (file == NULL) {
+        printf("Error opening file for writing.\n");
+        return;
+    }
+
+    // Open the file for writing
+    FILE* fileCounts = fopen(filename2, "w");
+    if (fileCounts == NULL) {
+        printf("Error opening file for writing.\n");
+        return;
+    }
+
+    int countS = 0;
+    int countI = 0;
+    int countR = 0;
+    int countD = 0;
+
+    // Write the current state of the world to the file
+    int i, j;
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            if (current_world[i][j] == _Susceptible) {
+                fprintf(file, "S");
+                countS++;
+            }
+            else if (current_world[i][j] == _Infected) {
+                fprintf(file, "I");
+                countI++;
+            }
+            else if (current_world[i][j] == _Recovered) {
+                fprintf(file, "R");
+                countR++;
+            }
+            else if (current_world[i][j] == _Dead) {
+                fprintf(file, "D");
+                countD++;
+            }
+        }
+        fprintf(file, "\n");
+    }
+
+
+    fprintf(fileCounts, "Susceptibles: %d\n", countS);
+    fprintf(fileCounts, "Infected: %d\n", countI);
+    fprintf(fileCounts, "Recovered: %d\n", countR);
+    fprintf(fileCounts, "Dead: %d\n", countD);
+    // Close the file
+    fclose(file);
+    fclose(fileCounts);
+}
+
+// Function to display the current state of the world
+void show(int** world)
+{
+    // Display the state of each cell using characters
+    int i, j;
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            if (world[i][j] == _Susceptible) {
+                printf("S");
+            }
+            else if (world[i][j] == _Infected) {
+                printf("I");
+            }
+            else if (world[i][j] == _Recovered) {
+                printf("R");
+            }
+            else if (world[i][j] == _Dead) {
+                printf("D");
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+// Function to calculate the counts of Susceptible, Infected, and Recovered neighbors
+void getCountsSIR(int** current_world, int* counts, int i, int j)
+{
+    // Initialize variables to store neighboring cell values
+    int upper = -1;           // Susceptible neighbor above
+    int upper_left = -1;      // Susceptible neighbor above and to the left
+    int upper_right = -1;     // Susceptible neighbor above and to the right
+    int left = -1;            // Susceptible neighbor to the left
+    int right = -1;           // Susceptible neighbor to the right
+    int lower = -1;           // Susceptible neighbor below
+    int lower_left = -1;      // Susceptible neighbor below and to the left
+    int lower_right = -1;     // Susceptible neighbor below and to the right
+
+    // Check boundary conditions and set neighbor values
+    if (i > 0) {
+        upper = current_world[i - 1][j];
+        if (j > 0) {
+            upper_left = current_world[i - 1][j - 1];
+        }
+        if (j < N - 1) {
+            upper_right = current_world[i - 1][j + 1];
+        }
+    }
+    if (j > 0) {
+        left = current_world[i][j - 1];
+    }
+    if (j < N - 1) {
+        right = current_world[i][j + 1];
+    }
+    if (i < N - 1) {
+        lower = current_world[i + 1][j];
+        if (j > 0) {
+            lower_left = current_world[i + 1][j - 1];
+        }
+        if (j < N - 1) {
+            lower_right = current_world[i + 1][j + 1];
+        }
+    }
+
+    // Initialize counts
+    counts[0] = 0;  // Count of Susceptible neighbors
+    counts[1] = 0;  // Count of Infected neighbors
+    counts[2] = 0;  // Count of Recovered neighbors
+
+    // Update counts based on neighbor cell states
+
+    // Upper neighbor
+    if (upper == _Susceptible) {
+        counts[0]++;
+    }
+    else if (upper == _Infected) {
+        counts[1]++;
+    }
+    else if (upper == _Recovered) {
+        counts[2]++;
+    }
+
+    // ... Similar checks for other neighbors ...
+     if (upper == _Susceptible) {
+        counts[0]++;
+    }
+    else if (upper == _Infected) {
+        counts[1]++;
+    }
+    else if (upper == _Recovered) {
+        counts[2]++;
+    }
+
+    if (upper_left == _Susceptible) {
+        counts[0]++;
+    }
+    else if (upper_left == _Infected) {
+        counts[1]++;
+    }
+    else if (upper_left == _Recovered) {
+        counts[2]++;
+    }
+
+    if (upper_right == _Susceptible) {
+        counts[0]++;
+    }
+    else if (upper_right == _Infected) {
+        counts[1]++;
+    }
+    else if (upper_right == _Recovered) {
+        counts[2]++;
+    }
+
+    if (left == _Susceptible) {
+        counts[0]++;
+    }
+    else if (left == _Infected) {
+        counts[1]++;
+    }
+    else if (left == _Recovered) {
+        counts[2]++;
+    }
+
+    if (right == _Susceptible) {
+        counts[0]++;
+    }
+    else if (right == _Infected) {
+        counts[1]++;
+    }
+    else if (right == _Recovered) {
+        counts[2]++;
+    }
+
+    if (lower == _Susceptible) {
+        counts[0]++;
+    }
+    else if (lower == _Infected) {
+        counts[1]++;
+    }
+    else if (lower == _Recovered) {
+        counts[2]++;
+    }
+
+    if (lower_left == _Susceptible) {
+        counts[0]++;
+    }
+    else if (lower_left == _Infected) {
+        counts[1]++;
+    }
+    else if (lower_left == _Recovered) {
+        counts[2]++;
+    }
+
+    if (lower_right == _Susceptible) {
+        counts[0]++;
+    }
+    else if (lower_right == _Infected) {
+        counts[1]++;
+    }
+    else if (lower_right == _Recovered) {
+        counts[2]++;
+    }
+
+
+}
+
+// Function to apply infection and recovery rules and update the world
+void* iteration(void* arg)
+{
+    int** current_world = ((ThreadParams*)arg)->current_world;
+    int** future_world = ((ThreadParams*)arg)->future_world;
+    int threadNum = ((ThreadParams*)arg)->threadNum;
+    free(arg);
+    int i, j;
+
+    // Loop through all cells in the world
+    for (i = threadNum; i < N; i += NUM_THREADS) {
+        for (j = 0; j < N; j++) {
+            int countsSIR[3];
+
+            // Get counts of Susceptible, Infected, and Recovered neighbors
+            getCountsSIR(current_world, countsSIR, i, j);
+
+            // Apply rules to update the future state of the cell
+            future_world[i][j] = current_world[i][j];
+            if (current_world[i][j] == _Susceptible) {
+                // Check if the number of infected neighbors is >= 3
+                if (countsSIR[1] >= 3) {
+                    // Probability of becoming infected due to nearby infections
+                    double infectionProb = 0.5; // Adjust this probability as needed
+                    if (getRandom() <= infectionProb) {
+                        future_world[i][j] = _Infected;
+                    }
+                }
+                // Check if the number of infected neighbors is >= 1
+                else if (countsSIR[1] >= 1) {
+                    // Probability of becoming infected due to some infections nearby
+                    double infectProb = 0.2; // Adjust this probability as needed
+                    if (getRandom() <= infectProb) {
+                        future_world[i][j] = _Infected;
+                    }
+                }
+            }
+            else if (current_world[i][j] == _Infected) {
+                // Check if the number of recovered neighbors is >= 5
+                if (countsSIR[2] >= 5) {
+                    // Probability of recovering from infection
+                    double recoveryProb = 0.4; // Adjust this probability as needed
+                    if (getRandom() <= recoveryProb) {
+                        future_world[i][j] = _Recovered;
+                    }
+                }
+                // Check if the number of infected neighbors is >= 5
+                else if (countsSIR[1] >= 5) {
+                    // Probability of dying due to widespread infections
+                    double deathProb = 0.2; // Adjust this probability as needed
+                    if (getRandom() <= deathProb) {
+                        future_world[i][j] = _Dead;
+                    }
+                }
+                // If not enough infections or recoveries, consider gradual recovery
+                else {
+                    // Probability of recovering slowly from infection
+                    double recoveryProb = 0.1; // Adjust this probability as needed
+                    if (getRandom() <= recoveryProb) {
+                        future_world[i][j] = _Recovered;
+                    }
+                }
+            }
+            else if (current_world[i][j] == _Recovered) {
+                // Check if the number of infected neighbors is > 6
+                if (countsSIR[1] > 6) {
+                    // Probability of getting infected again after recovery
+                    double reinfectionProb = 0.5; // Adjust this probability as needed
+                    if (getRandom() <= reinfectionProb) {
+                        future_world[i][j] = _Infected;
+                    }
+                }
+                // Check if the number of infected neighbors is >= 1
+                else if (countsSIR[1] >= 1) {
+                    // Probability of getting infected again after recovery
+                    double reinfectionProb = 0.2; // Adjust this probability as needed
+                    if (getRandom() <= reinfectionProb) {
+                        future_world[i][j] = _Infected;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+// Function to generate a random number between 0 and 1
+double getRandom()
+{
+    return rand() * 1.0 / RAND_MAX;
+}
+
+// Function to initialize the world with initial states
+void initialize(int** p)
+{
+    int i, j;
+
+    // Loop through all cells and assign initial states
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            if (getRandom() > 0.2) {
+                p[i][j] = _Susceptible;
+            }
+            else {
+                p[i][j] = _Infected;
+            }
+        }
+    }
+}
